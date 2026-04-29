@@ -1,7 +1,6 @@
 import { Route, Routes } from "react-router";
 import { Suspense, lazy } from "react";
 import { Toaster } from "@/components/ui/sonner";
-import { TRPCProvider } from "@/providers/trpc";
 
 const Home = lazy(() => import("@/pages/Home"));
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
@@ -29,28 +28,26 @@ function LoadingFallback() {
 
 export default function App() {
   return (
-    <TRPCProvider>
-      <Suspense fallback={<LoadingFallback />}>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/licitaciones" element={<Dashboard />} />
+    <Suspense fallback={<LoadingFallback />}>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/licitaciones" element={<Dashboard />} />
 
-          {/* SEO Service Pages */}
-          <Route path="/servicios/construccion" element={<Construccion />} />
-          <Route path="/servicios/climatizacion" element={<Climatizacion />} />
-          <Route path="/servicios/montaje" element={<Montaje />} />
+        {/* SEO Service Pages */}
+        <Route path="/servicios/construccion" element={<Construccion />} />
+        <Route path="/servicios/climatizacion" element={<Climatizacion />} />
+        <Route path="/servicios/montaje" element={<Montaje />} />
 
-          {/* Blog Pages */}
-          <Route path="/blog/eficiencia-energetica" element={<BlogEficiencia />} />
-          <Route path="/blog/hvac-inverter-vs-convencional" element={<BlogHvacInverter />} />
-          <Route path="/blog/normativa-climatizacion-salud" element={<BlogNormativa />} />
-          <Route path="/admin" element={<Admin />} />
+        {/* Blog Pages */}
+        <Route path="/blog/eficiencia-energetica" element={<BlogEficiencia />} />
+        <Route path="/blog/hvac-inverter-vs-convencional" element={<BlogHvacInverter />} />
+        <Route path="/blog/normativa-climatizacion-salud" element={<BlogNormativa />} />
+        <Route path="/admin" element={<Admin />} />
 
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </Suspense>
+        <Route path="*" element={<NotFound />} />
+      </Routes>
       <Toaster />
-    </TRPCProvider>
+    </Suspense>
   );
 }

@@ -93,8 +93,10 @@ export function createOAuthCallbackHandler() {
     }
 
     try {
-      const redirectUri = atob(state);
-      const tokenResp = await exchangeAuthCode(code, redirectUri);
+      const frontendUrl = atob(state);
+      // Use the backend callback URL for token exchange
+      const backendCallbackUri = `${new URL(c.req.url).origin}/api/oauth/callback`;
+      const tokenResp = await exchangeAuthCode(code, backendCallbackUri);
       const { userId } = await verifyAccessToken(tokenResp.access_token);
       const userProfile = await kimiUsers.getProfile(tokenResp.access_token);
       if (!userProfile) {
@@ -119,7 +121,8 @@ export function createOAuthCallbackHandler() {
         maxAge: Session.maxAgeMs / 1000,
       });
 
-      return c.redirect("/", 302);
+      // Redirect to the frontend URL passed in state
+      return c.redirect(frontendUrl, 302);
     } catch (error) {
       console.error("[OAuth] Callback failed", error);
       return c.json({ error: "OAuth callback failed" }, 500);
