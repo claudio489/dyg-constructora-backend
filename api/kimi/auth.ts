@@ -71,6 +71,40 @@ export async function authenticateRequest(headers: Headers) {
   return user;
 }
 
+export async function exchangeCodeForSession(
+  code: string,
+  redirectUri: string,
+  headers: Headers,
+): Promise<{ user: any; token: string }> {
+  const tokenResp = await exchangeAuthCode(code, redirectUri);
+  const { userId } = await verifyAccessToken(tokenResp.access_token);
+  const userProfile = await kimiUsers.getProfile(tokenResp.access_token);
+  if (!userProfile) {
+    throw new Error("Failed to fetch user profile from Kimi Open");
+  }
+
+  await upsertUser({
+    unionId: userId,
+    name: userProfile.name,
+    avatar: userProfile.avatar_url,
+    lastSignInAt: new Date(),
+  });
+
+  const token = await signSessionToken({
+    unionId: userId,
+    clientId: env.appId,
+  });
+
+  return {
+    user: {
+      unionId: userId,
+      name: userProfile.name,
+      avatar: userProfile.avatar_url,
+    },
+    token,
+  };
+}
+
 export function createOAuthCallbackHandler() {
   return async (c: Context) => {
     const code = c.req.query("code");
@@ -93,7 +127,7 @@ export function createOAuthCallbackHandler() {
     }
 
     try {
-      const frontendUrl = atob(state);
+      const frontendUrl = Buffer.from(state, 'base64').toString('utf8');
       // Use the backend callback URL for token exchange
       const backendCallbackUri = `${new URL(c.req.url).origin}/api/oauth/callback`;
       const tokenResp = await exchangeAuthCode(code, backendCallbackUri);
