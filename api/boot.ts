@@ -1,68 +1,67 @@
-import { Hono } from "hono";
-import { bodyLimit } from "hono/body-limit";
-import { cors } from "hono/cors";
-import type { HttpBindings } from "@hono/node-server";
-import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { appRouter } from "./router";
-import { createContext } from "./context";
-import { env } from "./lib/env";
-import { createOAuthCallbackHandler } from "./kimi/auth";
-import { Paths } from "@contracts/constants";
+import { Hono } from 'hono'
+import { cors } from 'hono/cors'
 
-const app = new Hono<{ Bindings: HttpBindings }>();
+const app = new Hono()
 
-// CORS for cross-domain frontend (Netlify → Render)
-// Allow any Netlify preview URL + your custom domain
-app.use(cors({
-  origin: env.isProduction
-    ? ["https://dygconstructora.cl", "https://www.dygconstructora.cl", /^https:\/\/.*\.netlify\.app$/]
-    : "http://localhost:5173",
-  credentials: true,
-  allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowHeaders: ["Content-Type", "Authorization"],
-}));
+// CORS (permite Netlify)
+app.use('*', cors({
+origin: '*',
+credentials: true,
+}))
 
-app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
+// Endpoint para iniciar OAuth
+app.get('/api/oauth/authorize', async (c) => {
+const url = new URL('https://www.kimi.com/authorize')
 
-// OAuth authorization endpoint — redirects to Kimi
-app.get("/api/oauth/authorize", (c) => {
-  const appID = env.appId;
-  const kimiAuthUrl = env.kimiAuthUrl;
-  const frontendUrl = c.req.query("redirect_uri") || env.kimiOpenUrl;
-  const state = btoa(frontendUrl);
+url.searchParams.set('client_id', process.env.KIMI_CLIENT_ID || '')
+url.searchParams.set('client_name', 'D&G Constructora')
 
-  const url = new URL(`${kimiAuthUrl}/api/oauth/authorize`);
-  url.searchParams.set("client_id", appID);
-  url.searchParams.set("redirect_uri", `${new URL(c.req.url).origin}/api/oauth/callback`);
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", "profile");
-  url.searchParams.set("state", state);
+// 🔥 FIX CLAVE: forzar HTTPS en redirect_uri
+url.searchParams.set(
+'redirect_uri',
+'https://dyg-constructora-backend.onrender.com/api/oauth/callback'
+)
 
-  return c.redirect(url.toString(), 302);
-});
+url.searchParams.set('response_type', 'code')
+url.searchParams.set('scope', 'profile')
 
-app.get(Paths.oauthCallback, createOAuthCallbackHandler());
+// guardar retorno al frontend
+const frontendReturn = c.req.query('redirect_uri') || 'https://voluble-brioche-70156f.netlify.app/'
+const state = Buffer.from(frontendReturn).toString('base64')
 
-app.use("/api/trpc/*", async (c) => {
-  return fetchRequestHandler({
-    endpoint: "/api/trpc",
-    req: c.req.raw,
-    router: appRouter,
-    createContext,
-  });
-});
+url.searchParams.set('state', state)
 
-app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));
+return c.redirect(url.toString())
+})
 
-export default app;
+// Callback OAuth
+app.get('/api/oauth/callback', async (c) => {
+const code = c.req.query('code')
+const state = c.req.query('state')
 
-if (env.isProduction) {
-  const { serve } = await import("@hono/node-server");
-  const { serveStaticFiles } = await import("./lib/vite");
-  serveStaticFiles(app);
-
-  const port = parseInt(process.env.PORT || "3000");
-  serve({ fetch: app.fetch, port }, () => {
-    console.log(`Server running on http://localhost:${port}/`);
-  });
+if (!code) {
+return c.text('Missing code', 400)
 }
+
+// 👉 aquí normalmente intercambias el code por token con Kimi
+// (asumo que ya lo tienes implementado en otro archivo)
+
+// decodificar state → URL de retorno frontend
+let redirectUrl = 'https://voluble-brioche-70156f.netlify.app/'
+
+try {
+if (state) {
+redirectUrl = Buffer.from(state, 'base64').toString('utf-8')
+}
+} catch (e) {
+console.error('Error decoding state', e)
+}
+
+// 👉 aquí deberías setear cookie/sesión si ya tienes lógica
+// ejemplo:
+// c.header('Set-Cookie', `session=abc123; Path=/; HttpOnly; Secure`)
+
+return c.redirect(redirectUrl)
+})
+
+export default app
