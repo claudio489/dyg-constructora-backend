@@ -32,6 +32,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/api/oauth/callback" element={<Login />} />
         <Route path="/licitaciones" element={<Dashboard />} />
 
         {/* SEO Service Pages */}
