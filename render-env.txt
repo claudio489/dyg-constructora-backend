@@ -1,0 +1,13 @@
+# Render Environment Variables for D&G Constructora
+# Upload this file using "Add from .env" button
+
+NODE_ENV=production
+PORT=10000
+DATABASE_URL=mysql://19A4EvD1kMdwotJ.root:m0GCWtpggcuG3GJbMa8CNCusFbaSTkxb@ep-t4ni387b5e83b7519dc8.epsrv-t4n281l4mrmemi4zls9a.ap-southeast-1.privatelink.aliyuncs.com:4000/19dd62c0-ea52-837d-8000-098d767a84a8
+APP_ID=19dd750a-d572-8e89-8000-00000a10f5cf
+APP_SECRET=F2SrQUPXeURQEgLhe8aFPvLM1Ue2ssxQ
+VITE_APP_ID=19dd750a-d572-8e89-8000-00000a10f5cf
+KIMI_AUTH_URL=https://auth.kimi.com
+KIMI_OPEN_URL=https://open.kimi.com
+OWNER_UNION_ID=d7at0aov0255erslrqo0
+MP_TICKET=8BBCAB7E-0911-4E40-BD68-C56A0A33FF78
