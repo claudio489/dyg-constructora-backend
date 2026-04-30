@@ -1,17 +1,24 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
+import { serve } from "@hono/node-server";
 
+// ==========================
+// SERVICES (PIPELINE)
+// ==========================
 import { scrapeLicitaciones } from "./scraper/engine";
 import { normalizeLicitaciones } from "./services/normalizer";
 import { analyzeWithKimi } from "./services/kimi";
 import { matchEngine } from "./services/match";
 
+// ==========================
+// APP
+// ==========================
 const app = new Hono();
 
-// --------------------
+// ==========================
 // MIDDLEWARE
-// --------------------
+// ==========================
 app.use(
   "*",
   cors({
@@ -23,31 +30,31 @@ app.use(
 
 app.use("*", bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 
-// --------------------
+// ==========================
 // HEALTH CHECK
-// --------------------
+// ==========================
 app.get("/ping", (c) => {
   return c.json({
     ok: true,
     service: "dyg-licitaciones-backend",
-    version: "3.0.0",
+    version: "3.1.0",
     ts: new Date().toISOString(),
   });
 });
 
-// =====================================================
+// ==========================
 // PIPELINE PRINCIPAL
-// =====================================================
+// ==========================
 app.post("/api/opportunities/generate", async (c) => {
   try {
     // 1. SCRAPER
-    const rawData = await scrapeLicitaciones();
+    const raw = await scrapeLicitaciones();
 
     // 2. NORMALIZER
-    const cleanData = normalizeLicitaciones(rawData);
+    const normalized = normalizeLicitaciones(raw);
 
-    // 3. AI (KIMI)
-    const analyzed = await analyzeWithKimi(cleanData);
+    // 3. AI ANALYSIS (KIMI fallback si no existe API)
+    const analyzed = await analyzeWithKimi(normalized);
 
     // 4. MATCH ENGINE
     const matched = matchEngine(analyzed);
@@ -70,9 +77,9 @@ app.post("/api/opportunities/generate", async (c) => {
   }
 });
 
-// =====================================================
-// LISTADO SIMPLE (mock / futuro DB)
-// =====================================================
+// ==========================
+// LISTADO (mock / futura DB)
+// ==========================
 let DB: any[] = [];
 
 app.get("/api/opportunities", (c) => {
@@ -82,7 +89,7 @@ app.get("/api/opportunities", (c) => {
   });
 });
 
-// guardar resultados manualmente si quieres
+// guardar manual
 app.post("/api/opportunities/save", async (c) => {
   const body = await c.req.json();
   DB.push(body);
@@ -93,9 +100,14 @@ app.post("/api/opportunities/save", async (c) => {
   });
 });
 
-// --------------------
-// EXPORT PARA RENDER
-// --------------------
-export default {
+// ==========================
+// SERVER (RENDER FIX)
+// ==========================
+const port = Number(process.env.PORT) || 10000;
+
+serve({
   fetch: app.fetch,
-};
+  port,
+});
+
+console.log(`[DYG-Licitaciones] server running on port ${port}`);
