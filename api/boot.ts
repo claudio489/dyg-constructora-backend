@@ -10,7 +10,7 @@ import { analyzeLicitacion } from "./services/ai-analyzer";
 import { runMatch } from "./services/match-engine";
 
 // DB
-import { getDb } from "./queries/connection";
+import { getDb, isDbAvailable } from "./queries/connection";
 import { opportunities, matches } from "@db/schema";
 import { eq, desc, and, gte } from "drizzle-orm";
 
@@ -127,26 +127,55 @@ app.post("/api/opportunities/generate", async (c) => {
       }
     }
 
-    // Step 4: store in DB (best effort)
+    // Step 4: store in DB (optional - pipeline works without DB)
     let guardadosEnDB = 0;
     let dbErrores = 0;
+    let dbErrorMessage = "";
     try {
       const db = getDb();
-      for (const item of enriched) {
-        const lic = item.licitacion;
-        try {
-          const existing = await db
-            .select()
-            .from(opportunities)
-            .where(eq(opportunities.mpId, lic.id))
-            .limit(1);
+      if (!db) {
+        dbErrorMessage = "DATABASE_URL not configured - running in memory-only mode";
+        console.log("[Pipeline] No DB configured - skipping persistence");
+      } else {
+        for (const item of enriched) {
+          const lic = item.licitacion;
+          try {
+            const existing = await db
+              .select()
+              .from(opportunities)
+              .where(eq(opportunities.mpId, lic.id))
+              .limit(1);
 
-          let oppId: number;
-          if (existing.length > 0) {
-            oppId = existing[0].id;
-            await db
-              .update(opportunities)
-              .set({
+            let oppId: number;
+            if (existing.length > 0) {
+              oppId = existing[0].id;
+              await db
+                .update(opportunities)
+                .set({
+                  nombre: lic.titulo,
+                  descripcion: lic.descripcion,
+                  organismo: lic.entidad,
+                  region: lic.region,
+                  comuna: lic.comuna,
+                  montoEstimado: lic.montoEstimado
+                    ? String(lic.montoEstimado)
+                    : null,
+                  moneda: lic.moneda,
+                  fechaPublicacion: lic.fechaPublicacion
+                    ? new Date(lic.fechaPublicacion)
+                    : null,
+                  fechaCierre: lic.fechaCierre
+                    ? new Date(lic.fechaCierre)
+                    : null,
+                  estado: mapEstadoToEnum(lic.estado),
+                  categoriaMp: lic.categoria,
+                  updatedAt: new Date(),
+                })
+                .where(eq(opportunities.id, oppId));
+            } else {
+              const insertResult = await db.insert(opportunities).values({
+                mpId: lic.id,
+                codigo: lic.id,
                 nombre: lic.titulo,
                 descripcion: lic.descripcion,
                 organismo: lic.entidad,
@@ -157,93 +186,73 @@ app.post("/api/opportunities/generate", async (c) => {
                   : null,
                 moneda: lic.moneda,
                 fechaPublicacion: lic.fechaPublicacion
-                  ? new Date(lic.fechaPublicacion)
-                  : null,
+                    ? new Date(lic.fechaPublicacion)
+                    : null,
                 fechaCierre: lic.fechaCierre
-                  ? new Date(lic.fechaCierre)
-                  : null,
+                    ? new Date(lic.fechaCierre)
+                    : null,
                 estado: mapEstadoToEnum(lic.estado),
                 categoriaMp: lic.categoria,
-                updatedAt: new Date(),
-              })
-              .where(eq(opportunities.id, oppId));
-          } else {
-            const insertResult = await db.insert(opportunities).values({
-              mpId: lic.id,
-              codigo: lic.id,
-              nombre: lic.titulo,
-              descripcion: lic.descripcion,
-              organismo: lic.entidad,
-              region: lic.region,
-              comuna: lic.comuna,
-              montoEstimado: lic.montoEstimado
-                ? String(lic.montoEstimado)
-                : null,
-              moneda: lic.moneda,
-              fechaPublicacion: lic.fechaPublicacion
-                ? new Date(lic.fechaPublicacion)
-                : null,
-              fechaCierre: lic.fechaCierre
-                ? new Date(lic.fechaCierre)
-                : null,
-              estado: mapEstadoToEnum(lic.estado),
-              categoriaMp: lic.categoria,
-            });
-            oppId = Number(insertResult.insertId);
-          }
-
-          // upsert match
-          if (item.match) {
-            const existingMatch = await db
-              .select()
-              .from(matches)
-              .where(eq(matches.opportunityId, oppId))
-              .limit(1);
-            if (existingMatch.length > 0) {
-              await db
-                .update(matches)
-                .set({
-                  score: item.match.matchScore,
-                  categoriaDg: inferCategoriaDg(lic.categoria, item.match),
-                  subcategoria: item.match.probability,
-                  keywordsMatched: lic.palabrasClave,
-                  prioridad:
-                    item.match.matchScore >= 75
-                      ? "alta"
-                      : item.match.matchScore >= 50
-                        ? "media"
-                        : "baja",
-                  updatedAt: new Date(),
-                })
-                .where(eq(matches.id, existingMatch[0].id));
-            } else {
-              await db
-                .insert(matches)
-                .values({
-                  opportunityId: oppId,
-                  score: item.match.matchScore,
-                  categoriaDg: inferCategoriaDg(lic.categoria, item.match),
-                  subcategoria: item.match.probability,
-                  keywordsMatched: lic.palabrasClave,
-                  estado: "review",
-                  prioridad:
-                    item.match.matchScore >= 75
-                      ? "alta"
-                      : item.match.matchScore >= 50
-                        ? "media"
-                        : "baja",
-                })
-                .catch(() => {});
+              });
+              oppId = Number(insertResult.insertId);
             }
-          }
 
-          guardadosEnDB++;
-        } catch (dbErr) {
-          dbErrores++;
-          console.error("[Pipeline] DB error for", lic.id, dbErr);
+            if (item.match) {
+              const existingMatch = await db
+                .select()
+                .from(matches)
+                .where(eq(matches.opportunityId, oppId))
+                .limit(1);
+              if (existingMatch.length > 0) {
+                await db
+                  .update(matches)
+                  .set({
+                    score: item.match.matchScore,
+                    categoriaDg: inferCategoriaDg(lic.categoria, item.match),
+                    subcategoria: item.match.probability,
+                    keywordsMatched: lic.palabrasClave,
+                    prioridad:
+                      item.match.matchScore >= 75
+                        ? "alta"
+                        : item.match.matchScore >= 50
+                          ? "media"
+                          : "baja",
+                    updatedAt: new Date(),
+                  })
+                  .where(eq(matches.id, existingMatch[0].id));
+              } else {
+                await db
+                  .insert(matches)
+                  .values({
+                    opportunityId: oppId,
+                    score: item.match.matchScore,
+                    categoriaDg: inferCategoriaDg(lic.categoria, item.match),
+                    subcategoria: item.match.probability,
+                    keywordsMatched: lic.palabrasClave,
+                    estado: "review",
+                    prioridad:
+                      item.match.matchScore >= 75
+                        ? "alta"
+                        : item.match.matchScore >= 50
+                          ? "media"
+                          : "baja",
+                  })
+                  .catch(() => {});
+              }
+            }
+
+            guardadosEnDB++;
+          } catch (dbErr) {
+            dbErrores++;
+            if (!dbErrorMessage) {
+              dbErrorMessage = dbErr instanceof Error ? dbErr.message : String(dbErr);
+            }
+            console.error("[Pipeline] DB error for", lic.id, dbErr);
+          }
         }
       }
     } catch (dbErr) {
+      dbErrorMessage = dbErr instanceof Error ? dbErr.message : String(dbErr);
       console.error("[Pipeline] Global DB error:", dbErr);
     }
 
@@ -281,6 +290,7 @@ app.post("/api/opportunities/generate", async (c) => {
           totalNormalizados: report.totalNormalizado,
           duplicadosEliminados: report.duplicadosEliminados,
           guardadosEnDB,
+          dbErrorMessage,
           errores:
             scrapeResult.errores.length + report.errores.length + dbErrores,
         },
@@ -314,6 +324,9 @@ app.post("/api/opportunities/generate", async (c) => {
 // OPPORTUNITIES - GET /api/opportunities
 // ============================================================================
 app.get("/api/opportunities", async (c) => {
+  if (!isDbAvailable()) {
+    return c.json({ success: true, count: 0, data: [], dbStatus: "not-configured" });
+  }
   try {
     const db = getDb();
     const query = c.req.query();
@@ -323,7 +336,7 @@ app.get("/api/opportunities", async (c) => {
     const minScore = query.minScore ? parseInt(query.minScore) : undefined;
     const limit = Math.min(1000, Math.max(1, parseInt(query.limit || "100")));
 
-    let q = db.select().from(opportunities) as any;
+    let q = db!.select().from(opportunities) as any;
     const conditions = [];
 
     if (estado) conditions.push(eq(opportunities.estado, estado));
@@ -339,7 +352,7 @@ app.get("/api/opportunities", async (c) => {
     const enriched = await Promise.all(
       rows.map(async (opp: any) => {
         try {
-          const mRows = await db
+          const mRows = await db!
             .select()
             .from(matches)
             .where(eq(matches.opportunityId, opp.id))
@@ -374,9 +387,12 @@ app.get("/api/opportunities", async (c) => {
 // (debe ir ANTES que /:id para no capturar "stats" como ID)
 // ============================================================================
 app.get("/api/opportunities/stats", async (c) => {
+  if (!isDbAvailable()) {
+    return c.json({ success: true, total: 0, byEstado: {}, byRegion: {}, avgMonto: 0, dbStatus: "not-configured" });
+  }
   try {
     const db = getDb();
-    const all = await db.select().from(opportunities);
+    const all = await db!.select().from(opportunities);
 
     const byEstado: Record<string, number> = {};
     const byRegion: Record<string, number> = {};
@@ -457,13 +473,16 @@ app.get("/api/opportunities/:id", async (c) => {
 // MATCHES - GET /api/matches
 // ============================================================================
 app.get("/api/matches", async (c) => {
+  if (!isDbAvailable()) {
+    return c.json({ success: true, count: 0, data: [], dbStatus: "not-configured" });
+  }
   try {
     const db = getDb();
     const query = c.req.query();
     const minScore = query.minScore ? parseInt(query.minScore) : undefined;
     const limit = Math.min(500, Math.max(1, parseInt(query.limit || "100")));
 
-    let q = db.select().from(matches) as any;
+    let q = db!.select().from(matches) as any;
     const conditions = [];
     if (minScore !== undefined) conditions.push(gte(matches.score, minScore));
     if (conditions.length > 0) q = q.where(and(...conditions));
@@ -479,9 +498,12 @@ app.get("/api/matches", async (c) => {
 // MATCHES STATS - GET /api/matches/stats
 // ============================================================================
 app.get("/api/matches/stats", async (c) => {
+  if (!isDbAvailable()) {
+    return c.json({ success: true, total: 0, alta: 0, media: 0, baja: 0, avgScore: 0, dbStatus: "not-configured" });
+  }
   try {
     const db = getDb();
-    const all = await db.select().from(matches);
+    const all = await db!.select().from(matches);
     return c.json({
       success: true,
       total: all.length,
