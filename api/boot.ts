@@ -1,61 +1,101 @@
 import { Hono } from "hono";
-import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
-import type { HttpBindings } from "@hono/node-server";
-import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { appRouter } from "./router";
-import { createContext } from "./context";
+import { bodyLimit } from "hono/body-limit";
 
-const app = new Hono<{ Bindings: HttpBindings }>();
+import { scrapeLicitaciones } from "./scraper/engine";
+import { normalizeLicitaciones } from "./services/normalizer";
+import { analyzeWithKimi } from "./services/kimi";
+import { matchEngine } from "./services/match";
 
-// CORS for cross-domain frontend (Netlify → Render)
-app.use(cors({
-  origin: (origin) => {
-    // Allow any Netlify app + custom domains
-    if (!origin) return "*";
-    if (/\.netlify\.app$/.test(origin)) return origin;
-    if (origin.includes("dygconstructora.cl")) return origin;
-    if (origin.includes("localhost")) return origin;
-    return "https://dygconstructora.cl";
-  },
-  credentials: true,
-  allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowHeaders: ["Content-Type", "Authorization"],
-}));
+const app = new Hono();
 
-app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
-
-// tRPC API routes
-app.use("/api/trpc/*", async (c) => {
-  return fetchRequestHandler({
-    endpoint: "/api/trpc",
-    req: c.req.raw,
-    router: appRouter,
-    createContext,
-  });
-});
-
-// Health check
-app.get("/ping", (c) =>
-  c.json({
-    ok: true,
-    service: "dyg-licitaciones-backend",
-    version: "2.0.0",
-    ts: new Date().toISOString(),
-    features: ["scraper", "normalizer", "ai-analyzer", "match-engine", "opportunities-api"],
+// --------------------
+// MIDDLEWARE
+// --------------------
+app.use(
+  "*",
+  cors({
+    origin: "*",
+    allowMethods: ["GET", "POST", "OPTIONS"],
+    allowHeaders: ["Content-Type"],
   })
 );
 
-// 404 for unmatched API routes
-app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));
+app.use("*", bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 
-export default app;
-
-if (process.env.NODE_ENV === "production") {
-  const { serve } = await import("@hono/node-server");
-  const port = parseInt(process.env.PORT || "10000");
-  serve({ fetch: app.fetch, port }, () => {
-    console.log(`[DYG-Licitaciones] Server running on port ${port}`);
-    console.log(`[DYG-Licitaciones] Health check: http://localhost:${port}/ping`);
+// --------------------
+// HEALTH CHECK
+// --------------------
+app.get("/ping", (c) => {
+  return c.json({
+    ok: true,
+    service: "dyg-licitaciones-backend",
+    version: "3.0.0",
+    ts: new Date().toISOString(),
   });
-}
+});
+
+// =====================================================
+// PIPELINE PRINCIPAL
+// =====================================================
+app.post("/api/opportunities/generate", async (c) => {
+  try {
+    // 1. SCRAPER
+    const rawData = await scrapeLicitaciones();
+
+    // 2. NORMALIZER
+    const cleanData = normalizeLicitaciones(rawData);
+
+    // 3. AI (KIMI)
+    const analyzed = await analyzeWithKimi(cleanData);
+
+    // 4. MATCH ENGINE
+    const matched = matchEngine(analyzed);
+
+    return c.json({
+      success: true,
+      count: matched.length,
+      data: matched,
+    });
+  } catch (error) {
+    console.error("[PIPELINE ERROR]", error);
+
+    return c.json(
+      {
+        success: false,
+        error: "pipeline_failed",
+      },
+      500
+    );
+  }
+});
+
+// =====================================================
+// LISTADO SIMPLE (mock / futuro DB)
+// =====================================================
+let DB: any[] = [];
+
+app.get("/api/opportunities", (c) => {
+  return c.json({
+    success: true,
+    data: DB,
+  });
+});
+
+// guardar resultados manualmente si quieres
+app.post("/api/opportunities/save", async (c) => {
+  const body = await c.req.json();
+  DB.push(body);
+
+  return c.json({
+    success: true,
+    saved: true,
+  });
+});
+
+// --------------------
+// EXPORT PARA RENDER
+// --------------------
+export default {
+  fetch: app.fetch,
+};
