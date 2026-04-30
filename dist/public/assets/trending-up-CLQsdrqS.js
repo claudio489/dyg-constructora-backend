@@ -1,1 +1,0 @@
-import{c}from"./index-D4NiXs9i.js";const o=[["path",{d:"M12 6v6l4 2",key:"mmk7yg"}],["circle",{cx:"12",cy:"12",r:"10",key:"1mglay"}]],n=c("clock",o);const e=[["path",{d:"M16 7h6v6",key:"box55l"}],["path",{d:"m22 7-8.5 8.5-5-5L2 17",key:"1t1m79"}]],a=c("trending-up",e);export{n as C,a as T};
