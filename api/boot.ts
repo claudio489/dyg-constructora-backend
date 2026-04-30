@@ -374,106 +374,8 @@ app.get("/api/opportunities", async (c) => {
 });
 
 // ============================================================================
-// OPPORTUNITIES - GET /api/opportunities/:id
-// ============================================================================
-app.get("/api/opportunities/:id", async (c) => {
-  try {
-    const db = getDb();
-    const id = parseInt(c.req.param("id"));
-    if (isNaN(id))
-      return c.json({ success: false, error: "Invalid ID" }, 400);
-
-    const rows = await db
-      .select()
-      .from(opportunities)
-      .where(eq(opportunities.id, id))
-      .limit(1);
-    const opp = rows[0];
-    if (!opp) return c.json({ success: false, error: "Not found" }, 404);
-
-    const mRows = await db
-      .select()
-      .from(matches)
-      .where(eq(matches.opportunityId, id))
-      .limit(1);
-    const m = mRows[0];
-
-    return c.json({
-      success: true,
-      data: {
-        ...opp,
-        matchScore: m?.score || 0,
-        matchCategoria: m?.categoriaDg || null,
-      },
-    });
-  } catch (err) {
-    console.error("[REST] GET /api/opportunities/:id error:", err);
-    return c.json({ success: false, error: "DB error" }, 500);
-  }
-});
-
-// ============================================================================
-// AI ANALYZE - POST /api/ai/analyze
-// Analyze any licitacion (not necessarily stored)
-// ============================================================================
-app.post("/api/ai/analyze", async (c) => {
-  try {
-    const body = await c.req.json();
-    const result = await analyzeLicitacion({
-      titulo: body.titulo || "",
-      descripcion: body.descripcion || "",
-      entidad: body.entidad || "",
-      montoEstimado: body.montoEstimado ?? null,
-      region: body.region || "",
-      comuna: body.comuna || "",
-      categoria: body.categoria || "OTROS",
-      palabrasClave: body.palabrasClave || [],
-    });
-    return c.json({ success: true, data: result });
-  } catch (err) {
-    console.error("[REST] POST /api/ai/analyze error:", err);
-    return c.json({ success: false, error: "Analysis failed" }, 500);
-  }
-});
-
-// ============================================================================
-// AI ANALYZE (stored opp) - POST /api/opportunities/:id/analyze
-// ============================================================================
-app.post("/api/opportunities/:id/analyze", async (c) => {
-  try {
-    const db = getDb();
-    const id = parseInt(c.req.param("id"));
-    if (isNaN(id))
-      return c.json({ success: false, error: "Invalid ID" }, 400);
-
-    const rows = await db
-      .select()
-      .from(opportunities)
-      .where(eq(opportunities.id, id))
-      .limit(1);
-    const opp = rows[0];
-    if (!opp) return c.json({ success: false, error: "Not found" }, 404);
-
-    const result = await analyzeLicitacion({
-      titulo: opp.nombre,
-      descripcion: opp.descripcion || "",
-      entidad: opp.organismo || "",
-      montoEstimado: opp.montoEstimado ? parseFloat(opp.montoEstimado) : null,
-      region: opp.region || "",
-      comuna: opp.comuna || "",
-      categoria: opp.categoriaMp || "OTROS",
-      palabrasClave: [],
-    });
-
-    return c.json({ success: true, data: { opportunity: opp, analysis: result } });
-  } catch (err) {
-    console.error("[REST] POST opp analyze error:", err);
-    return c.json({ success: false, error: "Analysis failed" }, 500);
-  }
-});
-
-// ============================================================================
-// OPPORTUNITIES STATS - GET /api/opportunities/stats
+// OPPORTUNITIES - GET /api/opportunities/stats
+// (debe ir ANTES que /:id para no capturar "stats" como ID)
 // ============================================================================
 app.get("/api/opportunities/stats", async (c) => {
   try {
@@ -512,6 +414,46 @@ app.get("/api/opportunities/stats", async (c) => {
       byRegion: {},
       avgMonto: 0,
     });
+  }
+});
+
+// ============================================================================
+// OPPORTUNITIES - GET /api/opportunities/:id
+// (va DESPUES de todas las rutas especificas)
+// ============================================================================
+app.get("/api/opportunities/:id", async (c) => {
+  try {
+    const db = getDb();
+    const id = parseInt(c.req.param("id"));
+    if (isNaN(id))
+      return c.json({ success: false, error: "Invalid ID" }, 400);
+
+    const rows = await db
+      .select()
+      .from(opportunities)
+      .where(eq(opportunities.id, id))
+      .limit(1);
+    const opp = rows[0];
+    if (!opp) return c.json({ success: false, error: "Not found" }, 404);
+
+    const mRows = await db
+      .select()
+      .from(matches)
+      .where(eq(matches.opportunityId, id))
+      .limit(1);
+    const m = mRows[0];
+
+    return c.json({
+      success: true,
+      data: {
+        ...opp,
+        matchScore: m?.score || 0,
+        matchCategoria: m?.categoriaDg || null,
+      },
+    });
+  } catch (err) {
+    console.error("[REST] GET /api/opportunities/:id error:", err);
+    return c.json({ success: false, error: "DB error" }, 500);
   }
 });
 
