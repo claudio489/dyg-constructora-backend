@@ -1,113 +1,93 @@
 import { Hono } from "hono";
-import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
-import { serve } from "@hono/node-server";
+import { cors } from "hono/cors";
+import type { HttpBindings } from "@hono/node-server";
+import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
+import { appRouter } from "./router";
+import { createContext } from "./context";
 
-// ==========================
-// SERVICES (PIPELINE)
-// ==========================
-import { scrapeLicitaciones } from "./scraper/engine";
-import { normalizeLicitaciones } from "./services/normalizer";
-import { analyzeWithKimi } from "./services/kimi";
-import { matchEngine } from "./services/match";
+const app = new Hono<{ Bindings: HttpBindings }>();
 
-// ==========================
-// APP
-// ==========================
-const app = new Hono();
-
-// ==========================
-// MIDDLEWARE
-// ==========================
+/**
+ * 🚨 CORS FIX REAL (tRPC + credentials compatible)
+ */
 app.use(
-  "*",
   cors({
-    origin: "*",
-    allowMethods: ["GET", "POST", "OPTIONS"],
-    allowHeaders: ["Content-Type"],
+    origin: (origin) => {
+      const allowed = [
+        "https://voluble-brioche-70156f.netlify.app",
+        "https://dygconstructora.cl",
+        "http://localhost:5173",
+      ];
+
+      if (!origin) return null;
+      if (allowed.includes(origin)) return origin;
+
+      if (origin.endsWith(".netlify.app")) return origin;
+
+      return allowed[0];
+    },
+    credentials: true,
+    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowHeaders: ["Content-Type", "Authorization"],
   })
 );
 
-app.use("*", bodyLimit({ maxSize: 50 * 1024 * 1024 }));
+app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 
-// ==========================
-// HEALTH CHECK
-// ==========================
-app.get("/ping", (c) => {
-  return c.json({
+/**
+ * 🧠 tRPC (PIPELINE LICITACIONES)
+ */
+app.use("/api/trpc/*", async (c) => {
+  return fetchRequestHandler({
+    endpoint: "/api/trpc",
+    req: c.req.raw,
+    router: appRouter,
+    createContext,
+  });
+});
+
+/**
+ * ❤️ HEALTH CHECK
+ */
+app.get("/ping", (c) =>
+  c.json({
     ok: true,
     service: "dyg-licitaciones-backend",
-    version: "3.1.0",
+    version: "2.1.0",
     ts: new Date().toISOString(),
-  });
+  })
+);
+
+/**
+ * ❌ API fallback (IMPORTANTE)
+ */
+app.all("/api/*", (c) => {
+  return c.json(
+    {
+      error: "Not Found",
+      path: c.req.path,
+    },
+    404
+  );
 });
 
-// ==========================
-// PIPELINE PRINCIPAL
-// ==========================
-app.post("/api/opportunities/generate", async (c) => {
-  try {
-    // 1. SCRAPER
-    const raw = await scrapeLicitaciones();
+export default app;
 
-    // 2. NORMALIZER
-    const normalized = normalizeLicitaciones(raw);
+/**
+ * 🚀 SERVER (Render)
+ */
+if (process.env.NODE_ENV === "production") {
+  const { serve } = await import("@hono/node-server");
+  const port = Number(process.env.PORT || 10000);
 
-    // 3. AI ANALYSIS (KIMI fallback si no existe API)
-    const analyzed = await analyzeWithKimi(normalized);
-
-    // 4. MATCH ENGINE
-    const matched = matchEngine(analyzed);
-
-    return c.json({
-      success: true,
-      count: matched.length,
-      data: matched,
-    });
-  } catch (error) {
-    console.error("[PIPELINE ERROR]", error);
-
-    return c.json(
-      {
-        success: false,
-        error: "pipeline_failed",
-      },
-      500
-    );
-  }
-});
-
-// ==========================
-// LISTADO (mock / futura DB)
-// ==========================
-let DB: any[] = [];
-
-app.get("/api/opportunities", (c) => {
-  return c.json({
-    success: true,
-    data: DB,
-  });
-});
-
-// guardar manual
-app.post("/api/opportunities/save", async (c) => {
-  const body = await c.req.json();
-  DB.push(body);
-
-  return c.json({
-    success: true,
-    saved: true,
-  });
-});
-
-// ==========================
-// SERVER (RENDER FIX)
-// ==========================
-const port = Number(process.env.PORT) || 10000;
-
-serve({
-  fetch: app.fetch,
-  port,
-});
-
-console.log(`[DYG-Licitaciones] server running on port ${port}`);
+  serve(
+    {
+      fetch: app.fetch,
+      port,
+    },
+    () => {
+      console.log(`[DYG] Backend running on ${port}`);
+    }
+  );
+}
