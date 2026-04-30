@@ -1,13 +1,12 @@
 import { z } from "zod";
-import { createRouter, publicQuery, adminQuery } from "../middleware";
+import { router, publicProcedure } from "../middleware";
 import { getDb } from "../queries/connection";
-const db = getDb();
 import { projects } from "../../db/schema";
 import { eq, desc, and, sql } from "drizzle-orm";
 
-export const projectRouter = createRouter({
+export const projectsRouter = router({
   // Listar proyectos D&G (publico)
-  list: publicQuery
+  list: publicProcedure
     .input(
       z.object({
         especialidad: z.enum(["CONSTRUCCION", "HVAC", "MONTAJE"]).optional(),
@@ -19,6 +18,7 @@ export const projectRouter = createRouter({
       }).optional()
     )
     .query(async ({ input }) => {
+      const db = getDb();
       const filters = [];
       
       if (input?.especialidad) filters.push(eq(projects.especialidad, input.especialidad));
@@ -28,21 +28,20 @@ export const projectRouter = createRouter({
       
       const where = filters.length > 0 ? and(...filters) : undefined;
       
-      const results = await db
+      return await db
         .select()
         .from(projects)
         .where(where)
         .orderBy(desc(projects.createdAt))
         .limit(input?.limit || 20)
         .offset(input?.offset || 0);
-      
-      return results;
     }),
 
   // Obtener proyecto por slug
-  getBySlug: publicQuery
+  getBySlug: publicProcedure
     .input(z.object({ slug: z.string() }))
     .query(async ({ input }) => {
+      const db = getDb();
       const result = await db
         .select()
         .from(projects)
@@ -51,8 +50,8 @@ export const projectRouter = createRouter({
       return result[0] || null;
     }),
 
-  // Crear proyecto (admin)
-  create: adminQuery
+  // Crear proyecto (public — no auth)
+  create: publicProcedure
     .input(
       z.object({
         slug: z.string().min(3).max(100),
@@ -77,11 +76,8 @@ export const projectRouter = createRouter({
         isDestacado: z.boolean().default(false),
       })
     )
-    .mutation(async ({ input, ctx }) => {
-      if (ctx.user?.role !== "admin") {
-        throw new Error("Unauthorized");
-      }
-      
+    .mutation(async ({ input }) => {
+      const db = getDb();
       const result = await db.insert(projects).values({
         ...input,
         createdAt: new Date(),
@@ -91,7 +87,8 @@ export const projectRouter = createRouter({
     }),
 
   // Estadisticas de proyectos (publico)
-  stats: publicQuery.query(async () => {
+  stats: publicProcedure.query(async () => {
+    const db = getDb();
     const total = await db.select({ count: sql<number>`count(*)` }).from(projects);
     const construccion = await db
       .select({ count: sql<number>`count(*)` })

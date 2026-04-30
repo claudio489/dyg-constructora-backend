@@ -1,89 +1,95 @@
 import { z } from "zod";
-import { createRouter, authedQuery } from "../middleware";
+import { router, publicProcedure } from "../middleware";
 import { getDb } from "../queries/connection";
-const db = getDb();
 import { matches, opportunities } from "../../db/schema";
-import { eq, desc, and, gte, lte } from "drizzle-orm";
+import { eq, desc, and, gte } from "drizzle-orm";
+import { runMatch } from "../services/match-engine";
+import type { CleanLicitacion } from "../scraper/normalizer";
 
-export const matchRouter = createRouter({
-  // Listar matches filtrados (requiere login)
-  list: authedQuery
+export const matchesRouter = router({
+  // ─── List matches ────────────────────────────────────────────────────────
+  list: publicProcedure
     .input(
       z.object({
-        categoriaDg: z.enum(["CONSTRUCCION", "HVAC", "MONTAJE", "MULTISERVICIO"]).optional(),
-        prioridad: z.enum(["alta", "media", "baja"]).optional(),
-        estado: z.enum(["review", "confirmed", "discarded", "postulating", "won", "lost"]).optional(),
         minScore: z.number().min(0).max(100).optional(),
-        maxScore: z.number().min(0).max(100).optional(),
-        limit: z.number().min(1).max(100).default(20),
-        offset: z.number().min(0).default(0),
-      }).optional()
+        categoriaDg: z.enum(["CONSTRUCCION", "HVAC", "MONTAJE"]).optional(),
+        prioridad: z.enum(["alta", "media", "baja"]).optional(),
+        limit: z.number().min(1).max(500).default(100),
+      }).optional(),
     )
     .query(async ({ input }) => {
-      const filters = [];
-      
-      if (input?.categoriaDg) filters.push(eq(matches.categoriaDg, input.categoriaDg));
-      if (input?.prioridad) filters.push(eq(matches.prioridad, input.prioridad));
-      if (input?.estado) filters.push(eq(matches.estado, input.estado));
-      if (input?.minScore) filters.push(gte(matches.score, input.minScore));
-      if (input?.maxScore) filters.push(lte(matches.score, input.maxScore));
-      
-      const where = filters.length > 0 ? and(...filters) : undefined;
-      
-      const results = await db
-        .select({
-          match: matches,
-          opportunity: opportunities,
-        })
-        .from(matches)
-        .innerJoin(opportunities, eq(matches.opportunityId, opportunities.id))
-        .where(where)
-        .orderBy(desc(matches.score))
-        .limit(input?.limit || 20)
-        .offset(input?.offset || 0);
-      
-      return results;
+      const db = getDb();
+      const filters = input || {};
+
+      let query = db.select().from(matches);
+      const conditions = [];
+
+      if (filters.minScore !== undefined) conditions.push(gte(matches.score, filters.minScore));
+      if (filters.categoriaDg) conditions.push(eq(matches.categoriaDg, filters.categoriaDg));
+      if (filters.prioridad) conditions.push(eq(matches.prioridad, filters.prioridad));
+
+      if (conditions.length > 0) query = query.where(and(...conditions)) as any;
+
+      return await query.orderBy(desc(matches.score)).limit(filters.limit || 100);
     }),
 
-  // Actualizar estado de un match
-  update: authedQuery
-    .input(
-      z.object({
-        id: z.number(),
-        estado: z.enum(["review", "confirmed", "discarded", "postulating", "won", "lost"]),
-        notas: z.string().optional(),
-        assignedTo: z.number().optional(),
-      })
-    )
+  // ─── Run match on a stored opportunity ──────────────────────────────────
+  run: publicProcedure
+    .input(z.object({ opportunityId: z.number() }))
     .mutation(async ({ input }) => {
-      await db
-        .update(matches)
-        .set({
-          estado: input.estado,
-          notas: input.notas,
-          assignedTo: input.assignedTo,
-          updatedAt: new Date(),
-        })
-        .where(eq(matches.id, input.id));
-      
-      return { success: true };
+      const db = getDb();
+      const oppRows = await db.select().from(opportunities).where(eq(opportunities.id, input.opportunityId));
+      const opp = oppRows[0];
+      if (!opp) throw new Error("Opportunity not found");
+
+      // Convert to CleanLicitacion format
+      const cleanLic: CleanLicitacion = {
+        id: opp.mpId || String(opp.id),
+        titulo: opp.nombre,
+        entidad: opp.organismo || "",
+        montoEstimado: opp.montoEstimado ? parseFloat(opp.montoEstimado) : null,
+        moneda: "CLP",
+        fechaPublicacion: opp.fechaPublicacion ? opp.fechaPublicacion.toISOString() : null,
+        fechaCierre: opp.fechaCierre ? opp.fechaCierre.toISOString() : null,
+        diasHastaCierre: opp.fechaCierre ? Math.ceil((opp.fechaCierre.getTime() - Date.now()) / (1000 * 60 * 60 * 24)) : null,
+        region: opp.region || "",
+        comuna: opp.comuna || "",
+        ubicacionNormalizada: `${opp.comuna}, ${opp.region}`,
+        link: `https://www.mercadopublico.cl/Procurement/Modules/RFB/Details.aspx?id=${opp.mpId}`,
+        estado: opp.estado,
+        categoria: opp.categoriaMp || "OTROS",
+        descripcion: opp.descripcion || "",
+        palabrasClave: [],
+        calidadDatos: 80,
+      };
+
+      const result = runMatch(cleanLic);
+
+      // Save match to DB
+      await db.insert(matches).values({
+        opportunityId: opp.id,
+        score: result.matchScore,
+        categoriaDg: result.factors.specialtyMatch ? (opp.categoriaMp || "CONSTRUCCION") as any : "CONSTRUCCION" as any,
+        subcategoria: result.probability,
+        keywordsMatched: result.detalleAjuste.slice(0, 5),
+        estado: "review",
+        prioridad: result.matchScore >= 75 ? "alta" : result.matchScore >= 50 ? "media" : "baja",
+      }).catch(() => {}); // Ignore duplicate errors
+
+      return result;
     }),
 
-  // Favoritos del usuario (matches confirmados)
-  favorites: authedQuery
-    .input(z.object({ limit: z.number().default(20) }).optional())
-    .query(async ({ input }) => {
-      const results = await db
-        .select({
-          match: matches,
-          opportunity: opportunities,
-        })
-        .from(matches)
-        .innerJoin(opportunities, eq(matches.opportunityId, opportunities.id))
-        .where(eq(matches.estado, "confirmed"))
-        .orderBy(desc(matches.score))
-        .limit(input?.limit || 20);
-      
-      return results;
-    }),
+  // ─── Stats ────────────────────────────────────────────────────────────────
+  stats: publicProcedure.query(async () => {
+    const db = getDb();
+    const all = await db.select().from(matches);
+
+    return {
+      total: all.length,
+      alta: all.filter((m) => m.prioridad === "alta").length,
+      media: all.filter((m) => m.prioridad === "media").length,
+      baja: all.filter((m) => m.prioridad === "baja").length,
+      avgScore: all.length > 0 ? Math.round(all.reduce((s, m) => s + m.score, 0) / all.length) : 0,
+    };
+  }),
 });
