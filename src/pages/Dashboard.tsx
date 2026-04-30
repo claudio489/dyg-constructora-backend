@@ -10,23 +10,67 @@ import {
   Search,
   Building2,
   ArrowLeft,
-  AlertTriangle
+  AlertTriangle,
+  Play,
+  Loader2
 } from 'lucide-react';
-import { trpc } from '@/providers/trpc';
+import { listOpportunities, getOpportunityStats, listMatches, generatePipeline } from '@/lib/api';
 
 export default function Dashboard() {
   const [filterCat, setFilterCat] = useState<'ALL' | 'CONSTRUCCION' | 'HVAC' | 'MONTAJE'>('ALL');
   const [filterPrioridad, setFilterPrioridad] = useState<'ALL' | 'alta' | 'media' | 'baja'>('ALL');
   const [search, setSearch] = useState('');
+  
+  const [oppLoading, setOppLoading] = useState(true);
+  const [matchesList, setMatchesList] = useState<any[]>([]);
+  const [stats, setStats] = useState<any>({ total: 0, alta: 0, media: 0, baja: 0, avgMonto: 0 });
+  const [pipelineRunning, setPipelineRunning] = useState(false);
+  const [pipelineResult, setPipelineResult] = useState<string>('');
+  const [error, setError] = useState<string>('');
 
-  // Fetch data from backend API
-  const { data: opportunitiesData, isLoading: oppLoading } = trpc.opportunities.list.useQuery({ limit: 100 });
-  const { data: statsData } = trpc.opportunities.stats.useQuery();
-  const { data: matchesData } = trpc.matches.list.useQuery({ minScore: 20, limit: 100 });
+  // Load data on mount
+  useEffect(() => {
+    loadData();
+  }, []);
 
-  const licitaciones = opportunitiesData || [];
-  const stats = statsData || { total: 0, alta: 0, media: 0, baja: 0, avgMonto: 0 };
-  const matchesList = matchesData || [];
+  async function loadData() {
+    setOppLoading(true);
+    setError('');
+    try {
+      const [matchesRes, statsRes] = await Promise.all([
+        listMatches({ minScore: 20, limit: 100 }),
+        getOpportunityStats(),
+      ]);
+      setMatchesList(matchesRes.data || []);
+      setStats(statsRes);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Error cargando datos');
+    } finally {
+      setOppLoading(false);
+    }
+  }
+
+  async function runPipeline() {
+    setPipelineRunning(true);
+    setPipelineResult('Ejecutando pipeline...');
+    setError('');
+    try {
+      const res = await generatePipeline({ maxResultados: 50, soloBiobio: true, minScore: 40 });
+      setPipelineResult(
+        `Pipeline OK: ${res.count} oportunidades | ` +
+        `Scrapeados: ${res.pipeline?.totalScrapeados || 0} | ` +
+        `Guardados: ${res.pipeline?.guardadosEnDB || 0} | ` +
+        `Duracion: ${res.pipeline?.duracionMs || 0}ms`
+      );
+      // Refresh data after pipeline
+      await loadData();
+    } catch (err) {
+      setPipelineResult('Error en pipeline');
+      setError(err instanceof Error ? err.message : 'Error');
+    } finally {
+      setPipelineRunning(false);
+    }
+  }
 
   const filtered = matchesList.filter((m: any) => {
     if (filterCat !== 'ALL' && m.categoriaDg !== filterCat) return false;
@@ -53,7 +97,7 @@ export default function Dashboard() {
 
   const getEstadoLabel = (estado: string) => {
     switch (estado) {
-      case 'review': return 'En revisión';
+      case 'review': return 'En revision';
       case 'confirmed': return 'Confirmada';
       case 'postulating': return 'Postulando';
       case 'discarded': return 'Descartada';
@@ -86,6 +130,14 @@ export default function Dashboard() {
             </Link>
           </div>
           <div className="flex items-center gap-4">
+            <button
+              onClick={runPipeline}
+              disabled={pipelineRunning}
+              className="text-sm bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg flex items-center gap-1.5 disabled:opacity-50"
+            >
+              {pipelineRunning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+              {pipelineRunning ? 'Ejecutando...' : 'Run Pipeline'}
+            </button>
             <Link to="/" className="text-sm text-gray-400 hover:text-amber-400 flex items-center gap-1 transition-colors">
               <ArrowLeft className="w-4 h-4" />
               Volver al sitio
@@ -95,6 +147,19 @@ export default function Dashboard() {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Pipeline result */}
+        {pipelineResult && (
+          <div className={`mb-4 p-3 rounded-lg text-sm ${pipelineResult.includes('Error') ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-green-500/10 text-green-400 border border-green-500/20'}`}>
+            {pipelineResult}
+          </div>
+        )}
+        {error && (
+          <div className="mb-4 p-3 rounded-lg text-sm bg-red-500/10 text-red-400 border border-red-500/20 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4" />
+            {error}
+          </div>
+        )}
+
         {/* KPI Cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           <div className="card-dg p-5">
@@ -113,14 +178,14 @@ export default function Dashboard() {
           </div>
           <div className="card-dg p-5 border-amber-500/20">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-gray-500 uppercase">En postulación</span>
+              <span className="text-xs text-gray-500 uppercase">En postulacion</span>
               <CheckCircle2 className="w-4 h-4 text-amber-400" />
             </div>
             <div className="text-2xl font-black text-amber-400">0</div>
           </div>
           <div className="card-dg p-5 border-red-500/20">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-gray-500 uppercase">Avg score</span>
+              <span className="text-xs text-gray-500 uppercase">Avg monto</span>
               <Clock className="w-4 h-4 text-red-400" />
             </div>
             <div className="text-2xl font-black text-red-400">{Math.round(stats.avgMonto / 1000000) || 0}M</div>
@@ -141,8 +206,8 @@ export default function Dashboard() {
               className="bg-[#0a0f1a] border border-[#1f2937] rounded-lg px-3 py-2 text-sm text-white focus:border-amber-500 focus:outline-none"
             >
               <option value="ALL">Todas las especialidades</option>
-              <option value="CONSTRUCCION">Construcción</option>
-              <option value="HVAC">Climatización</option>
+              <option value="CONSTRUCCION">Construccion</option>
+              <option value="HVAC">Climatizacion</option>
               <option value="MONTAJE">Montaje</option>
             </select>
 
@@ -161,7 +226,7 @@ export default function Dashboard() {
               <Search className="w-4 h-4 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
               <input 
                 type="text" 
-                placeholder="Buscar licitación..."
+                placeholder="Buscar licitacion..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="w-full bg-[#0a0f1a] border border-[#1f2937] rounded-lg pl-9 pr-3 py-2 text-sm text-white focus:border-amber-500 focus:outline-none"
@@ -185,11 +250,11 @@ export default function Dashboard() {
               <thead>
                 <tr className="border-b border-[#1f2937] bg-[#0a0f1a]">
                   <th className="text-left text-xs text-gray-500 uppercase tracking-wider px-5 py-3">Score</th>
-                  <th className="text-left text-xs text-gray-500 uppercase tracking-wider px-5 py-3">Licitación</th>
-                  <th className="text-left text-xs text-gray-500 uppercase tracking-wider px-5 py-3">Categoría</th>
+                  <th className="text-left text-xs text-gray-500 uppercase tracking-wider px-5 py-3">Licitacion</th>
+                  <th className="text-left text-xs text-gray-500 uppercase tracking-wider px-5 py-3">Categoria</th>
                   <th className="text-left text-xs text-gray-500 uppercase tracking-wider px-5 py-3">Prioridad</th>
                   <th className="text-left text-xs text-gray-500 uppercase tracking-wider px-5 py-3">Estado</th>
-                  <th className="text-left text-xs text-gray-500 uppercase tracking-wider px-5 py-3">Subcategoría</th>
+                  <th className="text-left text-xs text-gray-500 uppercase tracking-wider px-5 py-3">Subcategoria</th>
                   <th className="text-left text-xs text-gray-500 uppercase tracking-wider px-5 py-3">Keywords</th>
                 </tr>
               </thead>
@@ -243,9 +308,9 @@ export default function Dashboard() {
 
         {/* Footer */}
         <div className="mt-6 text-center text-xs text-gray-600">
-          Datos actualizados desde Mercado Público (ChileCompra). 
+          Datos actualizados desde Mercado Publico (ChileCompra). 
           <br />
-          El score de relevancia es calculado automáticamente según palabras clave del perfil D&G.
+          El score de relevancia es calculado automaticamente segun palabras clave del perfil D&G.
         </div>
       </div>
     </div>
