@@ -1,93 +1,98 @@
 import { Hono } from "hono";
-import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
-import type { HttpBindings } from "@hono/node-server";
-import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
-import { appRouter } from "./router";
-import { createContext } from "./context";
+import { bodyLimit } from "hono/body-limit";
 
-const app = new Hono<{ Bindings: HttpBindings }>();
+import { scrapeLicitaciones } from "./scraper/engine";
+import { normalizeLicitaciones } from "./services/normalizer";
 
-/**
- * 🚨 CORS FIX REAL (tRPC + credentials compatible)
- */
+const app = new Hono();
+
+// =========================
+// CORS FIX REAL (SIN TRPC)
+// =========================
 app.use(
+  "*",
   cors({
     origin: (origin) => {
+      if (!origin) return "*";
+
       const allowed = [
-        "https://voluble-brioche-70156f.netlify.app",
         "https://dygconstructora.cl",
-        "http://localhost:5173",
+        "https://www.dygconstructora.cl",
       ];
 
-      if (!origin) return null;
       if (allowed.includes(origin)) return origin;
+      if (origin.includes("netlify.app")) return origin;
+      if (origin.includes("localhost")) return origin;
 
-      if (origin.endsWith(".netlify.app")) return origin;
-
-      return allowed[0];
+      return "https://dygconstructora.cl";
     },
     credentials: true,
-    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowMethods: ["GET", "POST", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
   })
 );
 
-app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
+app.use("*", bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 
-/**
- * 🧠 tRPC (PIPELINE LICITACIONES)
- */
-app.use("/api/trpc/*", async (c) => {
-  return fetchRequestHandler({
-    endpoint: "/api/trpc",
-    req: c.req.raw,
-    router: appRouter,
-    createContext,
+// =========================
+// HEALTH
+// =========================
+app.get("/ping", (c) => {
+  return c.json({
+    ok: true,
+    service: "dyg-licitaciones-backend",
+    version: "3.1.0",
+    ts: new Date().toISOString(),
   });
 });
 
-/**
- * ❤️ HEALTH CHECK
- */
-app.get("/ping", (c) =>
-  c.json({
-    ok: true,
-    service: "dyg-licitaciones-backend",
-    version: "2.1.0",
-    ts: new Date().toISOString(),
-  })
-);
+// =========================
+// PIPELINE REAL
+// =========================
+app.post("/api/opportunities/generate", async (c) => {
+  try {
+    const raw = await scrapeLicitaciones();
 
-/**
- * ❌ API fallback (IMPORTANTE)
- */
-app.all("/api/*", (c) => {
-  return c.json(
-    {
-      error: "Not Found",
-      path: c.req.path,
-    },
-    404
-  );
+    const normalized = normalizeLicitaciones(raw);
+
+    return c.json({
+      success: true,
+      count: normalized.length,
+      data: normalized,
+    });
+  } catch (err: any) {
+    return c.json(
+      {
+        success: false,
+        error: err?.message || "pipeline error",
+      },
+      500
+    );
+  }
+});
+
+// =========================
+// 404
+// =========================
+app.all("*", (c) => {
+  return c.json({ error: "Not Found" }, 404);
 });
 
 export default app;
 
-/**
- * 🚀 SERVER (Render)
- */
+// =========================
+// SERVER RENDER
+// =========================
 if (process.env.NODE_ENV === "production") {
   const { serve } = await import("@hono/node-server");
+
   const port = Number(process.env.PORT || 10000);
 
-  serve(
-    {
-      fetch: app.fetch,
-      port,
-    },
-    () => {
-      console.log(`[DYG] Backend running on ${port}`);
-    }
-  );
+  serve({
+    fetch: app.fetch,
+    port,
+  });
+
+  console.log(`[DYG] running on ${port}`);
 }
